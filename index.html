@@ -72,10 +72,22 @@
         import { getFirestore, collection, onSnapshot, doc, setDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
         // --- CẤU HÌNH FIREBASE ---
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
+        let app, auth, db;
+        let isFirebaseConfigured = false;
+        try {
+            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+            if (firebaseConfig && Object.keys(firebaseConfig).length > 0) {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                isFirebaseConfigured = true;
+            } else {
+                console.warn("Chưa cấu hình Firebase. Ứng dụng sẽ sử dụng Local Storage để lưu trữ nội bộ trên trình duyệt.");
+            }
+        } catch (e) {
+            console.error("Lỗi cấu hình Firebase:", e);
+        }
+        
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'giabinh-airport-app';
 
         // --- MOCK DATABASE TÀI KHOẢN ---
@@ -168,7 +180,7 @@
 
             // Trạng thái THÔNG BÁO
             const [notifications, setNotifications] = useState([
-                { id: 'notif-1', title: 'Hệ thống đã sẵn sàng', message: 'Hệ thống đã kết nối cơ sở dữ liệu thời gian thực.', type: 'success', time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }), read: false }
+                { id: 'notif-1', title: 'Hệ thống đã sẵn sàng', message: isFirebaseConfigured ? 'Đã kết nối Cơ sở dữ liệu Đám mây.' : 'Đang sử dụng Bộ nhớ nội bộ (Local Storage).', type: 'success', time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }), read: false }
             ]);
             const [showNotifPanel, setShowNotifPanel] = useState(false);
             const [activeToastAlert, setActiveToastAlert] = useState(null); 
@@ -197,6 +209,31 @@
 
             // --- FIREBASE XÁC THỰC VÀ ĐỒNG BỘ DỮ LIỆU ---
             useEffect(() => {
+                if (!isFirebaseConfigured) {
+                    const localData = localStorage.getItem(`giabinh_gis_${appId}`);
+                    if (localData) {
+                        try {
+                            const data = JSON.parse(localData);
+                            if (data.layers) setLayers(typeof data.layers === 'string' ? JSON.parse(data.layers) : data.layers);
+                            if (data.features) setFeatures(typeof data.features === 'string' ? JSON.parse(data.features) : data.features);
+                            if (data.incidents) setIncidents(typeof data.incidents === 'string' ? JSON.parse(data.incidents) : data.incidents);
+                            if (data.usersDb) setUsersDb(typeof data.usersDb === 'string' ? JSON.parse(data.usersDb) : data.usersDb);
+                            if (data.projectInfo) setProjectInfo(typeof data.projectInfo === 'string' ? JSON.parse(data.projectInfo) : data.projectInfo);
+                        } catch (e) {
+                            console.error("Lỗi đọc dữ liệu Local Storage", e);
+                        }
+                    } else {
+                        // Khởi tạo mặc định nếu chưa có dữ liệu trong bộ nhớ nội bộ
+                        setLayers(INITIAL_LAYERS);
+                        setFeatures(INITIAL_FEATURES);
+                        setIncidents(INITIAL_INCIDENTS);
+                        setUsersDb(INITIAL_USERS);
+                        setProjectInfo(INITIAL_PROJECT_INFO);
+                    }
+                    setDataLoaded(true);
+                    return;
+                }
+
                 const initAuth = async () => {
                     try {
                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -214,7 +251,7 @@
             }, []);
 
             useEffect(() => {
-                if (!fbUser) return;
+                if (!isFirebaseConfigured || !fbUser) return;
                 
                 const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'store', 'main');
                 const unsubscribe = onSnapshot(docRef, (snap) => {
@@ -226,7 +263,7 @@
                         if (data.usersDb) setUsersDb(typeof data.usersDb === 'string' ? JSON.parse(data.usersDb) : data.usersDb);
                         if (data.projectInfo) setProjectInfo(typeof data.projectInfo === 'string' ? JSON.parse(data.projectInfo) : data.projectInfo);
                     } else {
-                        // Khởi tạo Database lần đầu tiên nếu trống
+                        // Khởi tạo Database đám mây lần đầu tiên nếu trống
                         setDoc(docRef, {
                             layers: JSON.stringify(INITIAL_LAYERS),
                             features: JSON.stringify(INITIAL_FEATURES),
@@ -244,8 +281,21 @@
                 return () => unsubscribe();
             }, [fbUser]);
 
-            // Các hàm lưu trữ Đám mây (Ghi đè State)
+            // Các hàm lưu trữ Đám mây / Local Storage (Ghi đè State)
             const saveToCloud = async (payload) => {
+                if (!isFirebaseConfigured) {
+                    const currentData = localStorage.getItem(`giabinh_gis_${appId}`);
+                    let parsedData = {};
+                    if (currentData) {
+                        try { parsedData = JSON.parse(currentData); } catch(e){}
+                    }
+                    for (const key in payload) {
+                        parsedData[key] = JSON.stringify(payload[key]);
+                    }
+                    localStorage.setItem(`giabinh_gis_${appId}`, JSON.stringify(parsedData));
+                    return;
+                }
+
                 if (!fbUser) return;
                 const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'store', 'main');
                 try {
@@ -620,7 +670,7 @@
                 }
                 setSearchQuery('');
                 setSearchResults([]);
-                setIsMobileMenuOpen(false); // Đóng menu nếu đang ở mobile
+                setIsMobileMenuOpen(false); 
             };
 
             // --- KHỞI TẠO BẢN ĐỒ LEAFLET ---
@@ -2714,7 +2764,7 @@
                             
                             if (exists) {
                                 updateFeatures(features.map(f => f.id === editingFeature.id ? editingFeature : f));
-                                triggerNotification('Cập nhật thuộc tính', `Thông tin của "${objName}" đã được cập nhật.`, 'info');
+                                triggerNotification('Cập nhật thuộc tính', `Thôngত্তি của "${objName}" đã được cập nhật.`, 'info');
                             } else {
                                 updateFeatures([...features, editingFeature]);
                                 setActiveTab('data'); 
